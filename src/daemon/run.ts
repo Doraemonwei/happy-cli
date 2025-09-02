@@ -5,7 +5,6 @@ import { ApiClient } from '@/api/api';
 import { TrackedSession } from './api/types';
 import { MachineMetadata, DaemonState } from '@/api/types';
 import { logger } from '@/ui/logger';
-import { authAndSetupMachineIfNeeded } from '@/ui/auth';
 import { configuration } from '@/configuration';
 import { startCaffeinate, stopCaffeinate } from '@/utils/caffeinate';
 import packageJson from '../../package.json';
@@ -125,9 +124,13 @@ export async function startDaemon(): Promise<void> {
       logger.debug('[DAEMON RUN] Sleep prevention enabled');
     }
 
-    // Ensure auth and machine registration BEFORE anything else
-    const { credentials, machineId } = await authAndSetupMachineIfNeeded();
-    logger.debug('[DAEMON RUN] Auth and machine setup complete');
+    // Single-user mode: no authentication required
+    const credentials = {
+      token: 'single-user-mode',
+      secret: new Uint8Array(32) // dummy secret for single-user mode
+    };
+    const machineId = 'default-machine'; // fixed machine ID for single-user mode
+    logger.debug('[DAEMON RUN] Single-user mode setup complete');
 
     // Setup state - key by PID
     const pidToTrackedSession = new Map<number, TrackedSession>();
@@ -371,7 +374,7 @@ export async function startDaemon(): Promise<void> {
     };
 
     // Create API client
-    const api = new ApiClient(credentials.token, credentials.secret);
+    const api = new ApiClient();
 
     // Get or create machine
     const machine = await api.createMachineOrGetExistingAsIs({

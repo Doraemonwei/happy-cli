@@ -2,7 +2,6 @@ import { logger } from '@/ui/logger'
 import { EventEmitter } from 'node:events'
 import { io, Socket } from 'socket.io-client'
 import { AgentState, ClientToServerEvents, MessageContent, Metadata, ServerToClientEvents, Session, Update, UserMessage, UserMessageSchema, Usage } from './types'
-import { decodeBase64, decrypt, encodeBase64, encrypt } from './encryption';
 import { backoff } from '@/utils/time';
 import { configuration } from '@/configuration';
 import { RawJSONLines } from '@/claude/types';
@@ -13,8 +12,6 @@ type RpcHandler<T = any, R = any> = (data: T) => R | Promise<R>;
 type RpcHandlerMap = Map<string, RpcHandler>;
 
 export class ApiSessionClient extends EventEmitter {
-    private readonly token: string;
-    private readonly secret: Uint8Array;
     readonly sessionId: string;
     private metadata: Metadata | null;
     private metadataVersion: number;
@@ -27,10 +24,8 @@ export class ApiSessionClient extends EventEmitter {
     private agentStateLock = new AsyncLock();
     private metadataLock = new AsyncLock();
 
-    constructor(token: string, secret: Uint8Array, session: Session) {
+    constructor(session: Session) {
         super()
-        this.token = token;
-        this.secret = secret;
         this.sessionId = session.id;
         this.metadata = session.metadata;
         this.metadataVersion = session.metadataVersion;
@@ -43,7 +38,6 @@ export class ApiSessionClient extends EventEmitter {
 
         this.socket = io(configuration.serverUrl, {
             auth: {
-                token: this.token,
                 clientType: 'session-scoped' as const,
                 sessionId: this.sessionId
             },
@@ -76,25 +70,22 @@ export class ApiSessionClient extends EventEmitter {
                 if (!handler) {
                     logger.debug('[SOCKET] [RPC] [ERROR] method not found', { method });
                     const errorResponse = { error: 'Method not found' };
-                    const encryptedError = encodeBase64(encrypt(errorResponse, this.secret));
-                    callback(encryptedError);
+                    callback(JSON.stringify(errorResponse));
                     return;
                 }
 
-                // Decrypt the incoming params
-                const decryptedParams = decrypt(decodeBase64(data.params), this.secret);
+                // Parse the incoming params (no decryption in single-user mode)
+                const params = typeof data.params === 'string' ? JSON.parse(data.params) : data.params;
 
                 // Call the handler
-                const result = await handler(decryptedParams);
+                const result = await handler(params);
 
-                // Encrypt and return the response
-                const encryptedResponse = encodeBase64(encrypt(result, this.secret));
-                callback(encryptedResponse);
+                // Return response directly (no encryption in single-user mode)
+                callback(JSON.stringify(result));
             } catch (error) {
                 logger.debug('[SOCKET] [RPC] [ERROR] Error handling RPC request', { error });
                 const errorResponse = { error: error instanceof Error ? error.message : 'Unknown error' };
-                const encryptedError = encodeBase64(encrypt(errorResponse, this.secret));
-                callback(encryptedError);
+                callback(JSON.stringify(errorResponse));
             }
         })
 
@@ -117,7 +108,7 @@ export class ApiSessionClient extends EventEmitter {
                 }
 
                 if (data.body.t === 'new-message' && data.body.message.content.t === 'encrypted') {
-                    const body = decrypt(decodeBase64(data.body.message.content.c), this.secret);
+                    const body = typeof data.body.message.content.c === 'string' ? JSON.parse(data.body.message.content.c) : data.body.message.content.c;
 
                     logger.debugLargeJson('[SOCKET] [UPDATE] Received update:', body)
 
@@ -136,11 +127,11 @@ export class ApiSessionClient extends EventEmitter {
                     }
                 } else if (data.body.t === 'update-session') {
                     if (data.body.metadata && data.body.metadata.version > this.metadataVersion) {
-                        this.metadata = decrypt(decodeBase64(data.body.metadata.value), this.secret);
+                        this.metadata = typeof data.body.metadata.value === 'string' ? JSON.parse(data.body.metadata.value) : data.body.metadata.value;
                         this.metadataVersion = data.body.metadata.version;
                     }
                     if (data.body.agentState && data.body.agentState.version > this.agentStateVersion) {
-                        this.agentState = data.body.agentState.value ? decrypt(decodeBase64(data.body.agentState.value), this.secret) : null;
+                        this.agentState = data.body.agentState.value ? (typeof data.body.agentState.value === 'string' ? JSON.parse(data.body.agentState.value) : data.body.agentState.value) : null;
                         this.agentStateVersion = data.body.agentState.version;
                     }
                 } else if (data.body.t === 'update-machine') {
@@ -209,10 +200,9 @@ export class ApiSessionClient extends EventEmitter {
 
         logger.debugLargeJson('[SOCKET] Sending message through socket:', content)
 
-        const encrypted = encodeBase64(encrypt(content, this.secret));
         this.socket.emit('message', {
             sid: this.sessionId,
-            message: encrypted
+            message: JSON.stringify(content)
         });
 
         // Track usage from assistant messages
@@ -253,10 +243,9 @@ export class ApiSessionClient extends EventEmitter {
                 data: event
             }
         };
-        const encrypted = encodeBase64(encrypt(content, this.secret));
         this.socket.emit('message', {
             sid: this.sessionId,
-            message: encrypted
+            message: JSON.stringify(content)
         });
     }
 
@@ -320,14 +309,14 @@ export class ApiSessionClient extends EventEmitter {
         this.metadataLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.metadata!); // Weird state if metadata is null - should never happen but here we are
-                const answer = await this.socket.emitWithAck('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: encodeBase64(encrypt(updated, this.secret)) });
+                const answer = await this.socket.emitWithAck('update-metadata', { sid: this.sessionId, expectedVersion: this.metadataVersion, metadata: JSON.stringify(updated) });
                 if (answer.result === 'success') {
-                    this.metadata = decrypt(decodeBase64(answer.metadata), this.secret);
+                    this.metadata = typeof answer.metadata === 'string' ? JSON.parse(answer.metadata) : answer.metadata;
                     this.metadataVersion = answer.version;
                 } else if (answer.result === 'version-mismatch') {
                     if (answer.version > this.metadataVersion) {
                         this.metadataVersion = answer.version;
-                        this.metadata = decrypt(decodeBase64(answer.metadata), this.secret);
+                        this.metadata = typeof answer.metadata === 'string' ? JSON.parse(answer.metadata) : answer.metadata;
                     }
                     throw new Error('Metadata version mismatch');
                 } else if (answer.result === 'error') {
@@ -346,15 +335,15 @@ export class ApiSessionClient extends EventEmitter {
         this.agentStateLock.inLock(async () => {
             await backoff(async () => {
                 let updated = handler(this.agentState || {});
-                const answer = await this.socket.emitWithAck('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? encodeBase64(encrypt(updated, this.secret)) : null });
+                const answer = await this.socket.emitWithAck('update-state', { sid: this.sessionId, expectedVersion: this.agentStateVersion, agentState: updated ? JSON.stringify(updated) : null });
                 if (answer.result === 'success') {
-                    this.agentState = answer.agentState ? decrypt(decodeBase64(answer.agentState), this.secret) : null;
+                    this.agentState = answer.agentState ? (typeof answer.agentState === 'string' ? JSON.parse(answer.agentState) : answer.agentState) : null;
                     this.agentStateVersion = answer.version;
                     logger.debug('Agent state updated', this.agentState);
                 } else if (answer.result === 'version-mismatch') {
                     if (answer.version > this.agentStateVersion) {
                         this.agentStateVersion = answer.version;
-                        this.agentState = answer.agentState ? decrypt(decodeBase64(answer.agentState), this.secret) : null;
+                        this.agentState = answer.agentState ? (typeof answer.agentState === 'string' ? JSON.parse(answer.agentState) : answer.agentState) : null;
                     }
                     throw new Error('Agent state version mismatch');
                 } else if (answer.result === 'error') {

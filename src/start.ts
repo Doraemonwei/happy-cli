@@ -49,19 +49,14 @@ export async function start(credentials: { secret: Uint8Array, token: string }, 
     }
 
     // Create session service
-    const api = new ApiClient(credentials.token, credentials.secret);
+    const api = new ApiClient();
 
     // Create a new session
     let state: AgentState = {};
 
-    // Get machine ID from settings (should already be set up)
-    const settings = await readSettings();
-    let machineId = settings?.machineId
-    if (!machineId) {
-        console.error(`[START] No machine ID found in settings, which is unexepcted since authAndSetupMachineIfNeeded should have created it. Please report this issue on https://github.com/slopus/happy-cli/issues`);
-        process.exit(1);
-    }
-    logger.debug(`Using machineId: ${machineId}`);
+    // Use fixed machine ID for single-user mode
+    const machineId = 'default-machine'; // Fixed machine ID for single-user mode
+    logger.debug(`Using single-user mode machineId: ${machineId}`);
 
     // Create machine if it doesn't exist
     await api.createMachineOrGetExistingAsIs({

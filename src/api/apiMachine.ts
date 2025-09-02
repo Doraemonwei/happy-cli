@@ -8,7 +8,6 @@ import { logger } from '@/ui/logger';
 import { configuration } from '@/configuration';
 import { MachineMetadata, DaemonState, Machine, Update, UpdateMachineBody } from './types';
 import { TrackedSession } from '@/daemon/api/types';
-import { encrypt, decrypt, encodeBase64, decodeBase64 } from './encryption';
 import { backoff } from '@/utils/time';
 
 
@@ -85,8 +84,6 @@ export class ApiMachineClient {
   private requestShutdown?: () => void;
 
   constructor(
-    private token: string,
-    private secret: Uint8Array,
     private machine: Machine
   ) { }
 
@@ -111,18 +108,18 @@ export class ApiMachineClient {
 
       const answer = await this.socket.emitWithAck('machine-update-metadata', {
         machineId: this.machine.id,
-        metadata: encodeBase64(encrypt(updated, this.secret)),
+        metadata: JSON.stringify(updated),
         expectedVersion: this.machine.metadataVersion
       });
 
       if (answer.result === 'success') {
-        this.machine.metadata = decrypt(decodeBase64(answer.metadata), this.secret);
+        this.machine.metadata = typeof answer.metadata === 'string' ? JSON.parse(answer.metadata) : answer.metadata;
         this.machine.metadataVersion = answer.version;
         logger.debug('[API MACHINE] Metadata updated successfully');
       } else if (answer.result === 'version-mismatch') {
         if (answer.version > this.machine.metadataVersion) {
           this.machine.metadataVersion = answer.version;
-          this.machine.metadata = decrypt(decodeBase64(answer.metadata), this.secret);
+          this.machine.metadata = typeof answer.metadata === 'string' ? JSON.parse(answer.metadata) : answer.metadata;
         }
         throw new Error('Metadata version mismatch'); // Triggers retry
       }
@@ -139,18 +136,18 @@ export class ApiMachineClient {
 
       const answer = await this.socket.emitWithAck('machine-update-state', {
         machineId: this.machine.id,
-        daemonState: encodeBase64(encrypt(updated, this.secret)),
+        daemonState: JSON.stringify(updated),
         expectedVersion: this.machine.daemonStateVersion
       });
 
       if (answer.result === 'success') {
-        this.machine.daemonState = decrypt(decodeBase64(answer.daemonState), this.secret);
+        this.machine.daemonState = typeof answer.daemonState === 'string' ? JSON.parse(answer.daemonState) : answer.daemonState;
         this.machine.daemonStateVersion = answer.version;
         logger.debug('[API MACHINE] Daemon state updated successfully');
       } else if (answer.result === 'version-mismatch') {
         if (answer.version > this.machine.daemonStateVersion) {
           this.machine.daemonStateVersion = answer.version;
-          this.machine.daemonState = decrypt(decodeBase64(answer.daemonState), this.secret);
+          this.machine.daemonState = typeof answer.daemonState === 'string' ? JSON.parse(answer.daemonState) : answer.daemonState;
         }
         throw new Error('Daemon state version mismatch'); // Triggers retry
       }
@@ -164,7 +161,6 @@ export class ApiMachineClient {
     this.socket = io(serverUrl, {
       transports: ['websocket'],
       auth: {
-        token: this.token,
         clientType: 'machine-scoped' as const,
         machineId: this.machine.id
       },
@@ -215,7 +211,8 @@ export class ApiMachineClient {
             throw new Error('Spawn session handler not set');
           }
 
-          const { directory, sessionId } = decrypt(decodeBase64(data.params), this.secret) || {};
+          const paramObj = typeof data.params === 'string' ? JSON.parse(data.params) : data.params;
+          const { directory, sessionId } = paramObj || {};
 
           if (!directory) {
             throw new Error('Directory is required');
@@ -241,14 +238,14 @@ export class ApiMachineClient {
             message: session.message 
           };
           logger.debug(`[API MACHINE] Sending RPC response:`, response);
-          callback(encodeBase64(encrypt(response, this.secret)));
+          callback(JSON.stringify(response));
           return;
         }
 
         if (data.method === stopMethod) {
           logger.debug('[API MACHINE] Received stop-session RPC request');
-          const decryptedParams = decrypt(decodeBase64(data.params), this.secret);
-          const { sessionId } = decryptedParams || {};
+          const paramObj = typeof data.params === 'string' ? JSON.parse(data.params) : data.params;
+          const { sessionId } = paramObj || {};
           if (!this.stopSession) {
             throw new Error('Stop session handler not set');
           }
@@ -262,8 +259,7 @@ export class ApiMachineClient {
           }
           logger.debug(`[API MACHINE] Stopped session ${sessionId}`);
           const response = { message: 'Session stopped' };
-          const encryptedResponse = encodeBase64(encrypt(response, this.secret));
-          callback(encryptedResponse);
+          callback(JSON.stringify(response));
           return;
         }
 
@@ -272,9 +268,9 @@ export class ApiMachineClient {
           logger.debug('[API MACHINE] Received stop-daemon RPC request');
 
           // Send acknowledgment immediately
-          callback(encodeBase64(encrypt({
+          callback(JSON.stringify({
             message: 'Daemon stop request acknowledged, starting shutdown sequence...'
-          }, this.secret)));
+          }));
 
           // Trigger shutdown callback
           setTimeout(() => {
@@ -291,7 +287,7 @@ export class ApiMachineClient {
       } catch (error: any) {
         logger.debug(`[API MACHINE] RPC handler failed:`, error.message || error);
         logger.debug(`[API MACHINE] Error stack:`, error.stack);
-        callback(encodeBase64(encrypt({ error: error.message || String(error) }, this.secret)));
+        callback(JSON.stringify({ error: error.message || String(error) }));
       }
     });
 
@@ -304,13 +300,13 @@ export class ApiMachineClient {
 
         if (update.metadata) {
           logger.debug('[API MACHINE] Received external metadata update');
-          this.machine.metadata = decrypt(decodeBase64(update.metadata.value), this.secret);
+          this.machine.metadata = typeof update.metadata.value === 'string' ? JSON.parse(update.metadata.value) : update.metadata.value;
           this.machine.metadataVersion = update.metadata.version;
         }
 
         if (update.daemonState) {
           logger.debug('[API MACHINE] Received external daemon state update');
-          this.machine.daemonState = decrypt(decodeBase64(update.daemonState.value), this.secret);
+          this.machine.daemonState = typeof update.daemonState.value === 'string' ? JSON.parse(update.daemonState.value) : update.daemonState.value;
           this.machine.daemonStateVersion = update.daemonState.version;
         }
       } else {

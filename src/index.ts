@@ -12,7 +12,6 @@ import { start, StartOptions } from '@/start'
 import { join } from 'node:path'
 import { logger } from './ui/logger'
 import { readCredentials, readSettings, updateSettings } from './persistence'
-import { doAuth, authAndSetupMachineIfNeeded } from './ui/auth'
 import packageJson from '../package.json'
 import { z } from 'zod'
 import { spawn } from 'child_process'
@@ -25,7 +24,6 @@ import { uninstall } from './daemon/uninstall'
 import { ApiClient } from './api/api'
 import { runDoctorCommand } from './ui/doctor'
 import { listDaemonSessions, stopDaemonSession } from './daemon/controlClient'
-import { handleAuthCommand } from './commands/auth'
 import { clearCredentials, clearMachineId, writeCredentials } from './persistence'
 import { spawnHappyCLI } from './utils/spawnHappyCLI'
 import { render } from 'ink'
@@ -57,29 +55,12 @@ import { DaemonPrompt } from './ui/ink/DaemonPrompt'
     await runDoctorCommand();
     return;
   } else if (subcommand === 'auth') {
-    // Handle auth subcommands
-    try {
-      await handleAuthCommand(args.slice(1));
-    } catch (error) {
-      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
-      if (process.env.DEBUG) {
-        console.error(error)
-      }
-      process.exit(1)
-    }
+    // Single-user mode: authentication not required
+    console.log(chalk.yellow('Authentication is not required in single-user mode.'));
     return;
   } else if (subcommand === 'logout') {
-    // Keep for backward compatibility - redirect to auth logout
-    console.log(chalk.yellow('Note: "happy logout" is deprecated. Use "happy auth logout" instead.\n'));
-    try {
-      await handleAuthCommand(['logout']);
-    } catch (error) {
-      console.error(chalk.red('Error:'), error instanceof Error ? error.message : 'Unknown error')
-      if (process.env.DEBUG) {
-        console.error(error)
-      }
-      process.exit(1)
-    }
+    // Single-user mode: logout not applicable
+    console.log(chalk.yellow('Logout is not applicable in single-user mode.'));
     return;
   } else if (subcommand === 'notify') {
     // Handle notification command
@@ -291,10 +272,11 @@ ${chalk.bold.cyan('Claude Code Options (from `claude --help`):')}
       // Don't exit - continue to pass --version to Claude Code
     }
 
-    // Normal flow - auth and machine setup
-    const {
-      credentials
-    } = await authAndSetupMachineIfNeeded();
+    // Single-user mode: no authentication required
+    const credentials = {
+      token: 'single-user-mode',
+      secret: new Uint8Array(32) // dummy secret for single-user mode
+    };
 
     // Daemon auto-start preference (machine already set up)
     let settings = await readSettings();
@@ -426,7 +408,7 @@ ${chalk.bold('Examples:')}
 
   try {
     // Create API client and send push notification
-    const api = new ApiClient(credentials.token, credentials.secret)
+    const api = new ApiClient()
 
     // Use custom title or default to "Happy"
     const notificationTitle = title || 'Happy'

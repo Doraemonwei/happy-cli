@@ -11,12 +11,10 @@ export interface PushToken {
 
 
 export class PushNotificationClient {
-    private readonly token: string
     private readonly baseUrl: string
     private readonly expo: Expo
 
-    constructor(token: string, baseUrl: string = 'https://api.cluster-fluster.com') {
-        this.token = token
+    constructor(baseUrl: string = 'https://api.cluster-fluster.com') {
         this.baseUrl = baseUrl
         this.expo = new Expo()
     }
@@ -30,7 +28,6 @@ export class PushNotificationClient {
                 `${this.baseUrl}/v1/push-tokens`,
                 {
                     headers: {
-                        'Authorization': `Bearer ${this.token}`,
                         'Content-Type': 'application/json'
                     }
                 }

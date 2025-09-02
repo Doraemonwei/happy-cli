@@ -3,21 +3,16 @@ import { logger } from '@/ui/logger'
 import type { AgentState, CreateSessionResponse, Metadata, Session, Machine, MachineMetadata, DaemonState } from '@/api/types'
 import { ApiSessionClient } from './apiSession';
 import { ApiMachineClient } from './apiMachine';
-import { decodeBase64, decrypt, encodeBase64, encrypt } from './encryption';
 import { PushNotificationClient } from './pushNotifications';
 import { configuration } from '@/configuration';
 import chalk from 'chalk';
 import { clearMachineId } from '@/persistence';
 
 export class ApiClient {
-  private readonly token: string;
-  private readonly secret: Uint8Array;
   private readonly pushClient: PushNotificationClient;
 
-  constructor(token: string, secret: Uint8Array) {
-    this.token = token
-    this.secret = secret
-    this.pushClient = new PushNotificationClient(token)
+  constructor() {
+    this.pushClient = new PushNotificationClient()
   }
 
   /**
@@ -29,12 +24,11 @@ export class ApiClient {
         `${configuration.serverUrl}/v1/sessions`,
         {
           tag: opts.tag,
-          metadata: encodeBase64(encrypt(opts.metadata, this.secret)),
-          agentState: opts.state ? encodeBase64(encrypt(opts.state, this.secret)) : null
+          metadata: JSON.stringify(opts.metadata),
+          agentState: opts.state ? JSON.stringify(opts.state) : null
         },
         {
           headers: {
-            'Authorization': `Bearer ${this.token}`,
             'Content-Type': 'application/json'
           },
           timeout: 5000 // 5 second timeout
@@ -48,9 +42,9 @@ export class ApiClient {
         createdAt: raw.createdAt,
         updatedAt: raw.updatedAt,
         seq: raw.seq,
-        metadata: decrypt(decodeBase64(raw.metadata), this.secret),
+        metadata: typeof raw.metadata === 'string' ? JSON.parse(raw.metadata) : raw.metadata,
         metadataVersion: raw.metadataVersion,
-        agentState: raw.agentState ? decrypt(decodeBase64(raw.agentState), this.secret) : null,
+        agentState: raw.agentState ? (typeof raw.agentState === 'string' ? JSON.parse(raw.agentState) : raw.agentState) : null,
         agentStateVersion: raw.agentStateVersion
       }
       return session;
@@ -67,7 +61,6 @@ export class ApiClient {
   async getMachine(machineId: string): Promise<Machine | null> {
     const response = await axios.get(`${configuration.serverUrl}/v1/machines/${machineId}`, {
       headers: {
-        'Authorization': `Bearer ${this.token}`,
         'Content-Type': 'application/json'
       },
       timeout: 2000
@@ -80,12 +73,12 @@ export class ApiClient {
 
     logger.debug(`[API] Machine ${machineId} fetched from server`);
 
-    // Decrypt metadata and daemonState like we do for sessions
+    // Parse metadata and daemonState for single-user mode
     const machine: Machine = {
       id: raw.id,
-      metadata: raw.metadata ? decrypt(decodeBase64(raw.metadata), this.secret) : null,
+      metadata: raw.metadata ? (typeof raw.metadata === 'string' ? JSON.parse(raw.metadata) : raw.metadata) : null,
       metadataVersion: raw.metadataVersion || 0,
-      daemonState: raw.daemonState ? decrypt(decodeBase64(raw.daemonState), this.secret) : null,
+      daemonState: raw.daemonState ? (typeof raw.daemonState === 'string' ? JSON.parse(raw.daemonState) : raw.daemonState) : null,
       daemonStateVersion: raw.daemonStateVersion || 0,
       active: raw.active,
       activeAt: raw.activeAt,
@@ -108,12 +101,11 @@ export class ApiClient {
       `${configuration.serverUrl}/v1/machines`,
       {
         id: opts.machineId,
-        metadata: encodeBase64(encrypt(opts.metadata, this.secret)),
-        daemonState: opts.daemonState ? encodeBase64(encrypt(opts.daemonState, this.secret)) : undefined
+        metadata: JSON.stringify(opts.metadata),
+        daemonState: opts.daemonState ? JSON.stringify(opts.daemonState) : undefined
       },
       {
         headers: {
-          'Authorization': `Bearer ${this.token}`,
           'Content-Type': 'application/json'
         },
         timeout: 5000
@@ -129,12 +121,12 @@ export class ApiClient {
     const raw = response.data.machine;
     logger.debug(`[API] Machine ${opts.machineId} registered/updated with server`);
 
-    // Return decrypted machine like we do for sessions
+    // Return parsed machine for single-user mode
     const machine: Machine = {
       id: raw.id,
-      metadata: raw.metadata ? decrypt(decodeBase64(raw.metadata), this.secret) : null,
+      metadata: raw.metadata ? (typeof raw.metadata === 'string' ? JSON.parse(raw.metadata) : raw.metadata) : null,
       metadataVersion: raw.metadataVersion || 0,
-      daemonState: raw.daemonState ? decrypt(decodeBase64(raw.daemonState), this.secret) : null,
+      daemonState: raw.daemonState ? (typeof raw.daemonState === 'string' ? JSON.parse(raw.daemonState) : raw.daemonState) : null,
       daemonStateVersion: raw.daemonStateVersion || 0,
       active: raw.active,
       activeAt: raw.activeAt,
@@ -145,11 +137,11 @@ export class ApiClient {
   }
 
   sessionSyncClient(session: Session): ApiSessionClient {
-    return new ApiSessionClient(this.token, this.secret, session);
+    return new ApiSessionClient(session);
   }
 
   machineSyncClient(machine: Machine): ApiMachineClient {
-    return new ApiMachineClient(this.token, this.secret, machine);
+    return new ApiMachineClient(machine);
   }
 
   push(): PushNotificationClient {
