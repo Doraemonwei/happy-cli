@@ -8,12 +8,18 @@ import { PermissionMode } from '@/claude/loop'
 export type Usage = z.infer<typeof UsageSchema>
 
 /**
- * Base message content structure for encrypted messages
+ * Base message content structure for encrypted or plain messages
  */
-export const SessionMessageContentSchema = z.object({
-  c: z.string(), // Base64 encoded encrypted content
-  t: z.literal('encrypted')
-})
+export const SessionMessageContentSchema = z.union([
+  z.object({
+    c: z.string(), // Base64 encoded encrypted content
+    t: z.literal('encrypted')
+  }),
+  z.object({
+    c: z.string(), // Plain text content (single-user mode)
+    t: z.literal('plain')
+  })
+])
 
 export type SessionMessageContent = z.infer<typeof SessionMessageContentSchema>
 

@@ -107,8 +107,16 @@ export class ApiSessionClient extends EventEmitter {
                     return;
                 }
 
-                if (data.body.t === 'new-message' && data.body.message.content.t === 'encrypted') {
-                    const body = typeof data.body.message.content.c === 'string' ? JSON.parse(data.body.message.content.c) : data.body.message.content.c;
+                if (data.body.t === 'new-message' && (data.body.message.content.t === 'encrypted' || data.body.message.content.t === 'plain')) {
+                    // Handle both encrypted and plain messages (single-user mode uses plain)
+                    let body: any;
+                    if (data.body.message.content.t === 'plain') {
+                        // Single-user mode: plain text content
+                        body = typeof data.body.message.content.c === 'string' ? JSON.parse(data.body.message.content.c) : data.body.message.content.c;
+                    } else {
+                        // Legacy encrypted mode
+                        body = typeof data.body.message.content.c === 'string' ? JSON.parse(data.body.message.content.c) : data.body.message.content.c;
+                    }
 
                     logger.debugLargeJson('[SOCKET] [UPDATE] Received update:', body)
 
