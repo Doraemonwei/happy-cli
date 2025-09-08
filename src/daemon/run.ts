@@ -189,7 +189,7 @@ export async function startDaemon(): Promise<void> {
 
       // Directory might be relative - lets make it absolute
       if (directory.startsWith('~')) {
-        directory = resolve(os.homedir(), directory.replace('~', ''));
+        directory = resolve(os.homedir(), directory.replace('~/', ''));
       }
 
       try {
